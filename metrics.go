@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package mongostatusd
 
 import (
 	"context"
@@ -60,13 +60,13 @@ var defaultMillisecondsDistribution = view.Distribution(
 	// [0ms, 0.001ms, 0.005ms, 0.01ms, 0.05ms, 0.1ms, 0.5ms, 1ms, 1.5ms, 2ms, 2.5ms, 5ms, 10ms, 25ms, 50ms, 100ms, 200ms, 400ms, 600ms, 800ms, 1s, 1.5s, 2.5s, 5s, 10s, 20s, 40s, 100s, 200s, 500s, 750s, 1000s]
 	0.0, 0.000001, 0.000005, 0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.0015, 0.002, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.5, 2.5, 5.0, 10.0, 20.0, 40.0, 100.0, 200.0, 500.0, 750.0, 1000.0)
 
-var allViews = []*view.View{
+var AllViews = []*view.View{
 	{
 		Name:        "mongodb/server/wiredtiger.cache",
 		Measure:     mWiredTigerCache,
 		Description: "WiredTiger engine cache stats",
 		Aggregation: defaultBytesDistribution,
-		TagKeys:     withCompulsoryKeys(keyType, keyValue),
+		TagKeys:     withCompulsoryKeys(keyType),
 	},
 	{
 		Name:        "mongodb/server/mem_stats",
@@ -87,14 +87,14 @@ var allViews = []*view.View{
 		Measure:     mNetworkStats,
 		Description: "Network statistics",
 		Aggregation: defaultBytesDistribution,
-		TagKeys:     withCompulsoryKeys(keyType, keyValue),
+		TagKeys:     withCompulsoryKeys(keyType),
 	},
 	{
 		Name:        "mongodb/server/requests",
 		Measure:     mRequests,
 		Description: "The number of requests",
 		Aggregation: view.Count(),
-		TagKeys:     withCompulsoryKeys(keyType, keyValue),
+		TagKeys:     withCompulsoryKeys(keyType),
 	},
 	{
 		Name:        "mongodb/server/connection",
@@ -167,7 +167,7 @@ func insertCompulsoryTagKeys(ctx context.Context, sv *ServerStatus) (context.Con
 		tag.Upsert(keyProcess, sv.Process))
 }
 
-func (sv *ServerStatus) recordStats(ctx context.Context) context.Context {
+func (sv *ServerStatus) recordMetrics(ctx context.Context) context.Context {
 	ctx, _ = insertCompulsoryTagKeys(ctx, sv)
 	methods := []func(context.Context, *ServerStatus) context.Context{
 		recordMemStats,

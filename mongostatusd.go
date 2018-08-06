@@ -12,72 +12,60 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package mongostatusd
 
 import (
 	"context"
-	"log"
 	"time"
-
-	"contrib.go.opencensus.io/exporter/stackdriver"
-	"go.opencensus.io/stats/view"
-	"go.opencensus.io/trace"
 
 	"github.com/mongodb/mongo-go-driver/bson"
 	"github.com/mongodb/mongo-go-driver/mongo"
-
-	"github.com/orijtech/otils"
 )
 
-func main() {
-	flushFn, err := enableOpenCensus()
-	if err != nil {
-		log.Fatalf("Failed to enable OpenCensus: %v", err)
-	}
-	defer flushFn()
-
-	mongoURI := otils.EnvOrAlternates("MONGO_SERVER_URI", "localhost:27017")
-	mc, err := mongo.NewClient("mongodb://" + mongoURI)
-	if err != nil {
-		log.Fatalf("Failed to create MongoDB client: %v", err)
-	}
-	if err := mc.Connect(context.Background()); err != nil {
-		log.Fatalf("Failed to connect to the MongoDB server: %v", err)
-	}
-	defer mc.Disconnect(context.Background())
-
-	db := mc.Database("test")
-	blob, err := db.RunCommand(context.Background(), bson.NewDocument(bson.EC.Int32("serverStatus", 1)))
-	if err != nil {
-		log.Fatalf(`Failed to run "serverStatus": %v`, err)
-	}
-	ss := new(ServerStatus)
-	if err := bson.Unmarshal(blob, ss); err != nil {
-		log.Fatalf("Failed to unmarshal ServerStatus: %v", err)
-	}
-	log.Printf("ss: %+v\n\n", ss.RecordStats)
-
-	ss.recordStats(context.Background())
-
-	<-time.After(250 * time.Millisecond)
+type Config struct {
+	MongoDBName   string        `yaml:"mongodb_name"`
+	MonitorPeriod time.Duration `yaml:"monitor_period"`
 }
 
-func enableOpenCensus() (func(), error) {
-	if err := view.Register(allViews...); err != nil {
-		return nil, err
+const defaultRefreshPeriod = 8 * time.Second
+
+func (cfg *Config) Watch(mc *mongo.Client, stop <-chan bool) chan error {
+	refreshPeriod := cfg.MonitorPeriod
+	if refreshPeriod <= 0 {
+		refreshPeriod = defaultRefreshPeriod
 	}
-	sd, err := stackdriver.NewExporter(stackdriver.Options{
-		ProjectID:    otils.EnvOrAlternates("MONGOSTATUSD_PROJECTID", "census-demos"),
-		MetricPrefix: otils.EnvOrAlternates("MONGOSTATUSD_METRIC_PREFIX", "mongostatusd"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	trace.ApplyConfig(trace.Config{DefaultSampler: trace.AlwaysSample()})
-	trace.RegisterExporter(sd)
-	view.RegisterExporter(sd)
-	view.SetReportingPeriod(150 * time.Millisecond)
-	return sd.Flush, nil
+	db := mc.Database(cfg.MongoDBName)
+
+	errsChan := make(chan error, 1)
+
+	go func() {
+		defer func() {
+			close(errsChan)
+		}()
+
+		for {
+			select {
+			case <-stop:
+				return
+
+			case <-time.After(refreshPeriod):
+				ctx := context.Background()
+				blob, err := db.RunCommand(ctx, bson.NewDocument(bson.EC.Int32("serverStatus", 1)))
+				if err != nil {
+					errsChan <- err
+					continue
+				}
+				ss := new(ServerStatus)
+				if err := bson.Unmarshal(blob, ss); err != nil {
+					errsChan <- err
+					return
+				}
+				ss.recordMetrics(ctx)
+			}
+		}
+	}()
+
+	return errsChan
 }
 
 // The content from here on below is copied from https://github.com/mongodb/mongo/blob/30aded8889e2806aa22d0d4fcfb6314b07074771/src/mongo/gotools/mongostat/status/server_status.go

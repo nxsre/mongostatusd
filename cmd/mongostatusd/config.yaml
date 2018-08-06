@@ -1,0 +1,31 @@
+metrics_report_period: 5s
+
+stackdriver:
+    project_id: census-demos
+    metric_prefix: mongostatusd
+
+mongodb_uri: mongodb://localhost:27017
+mongodb_name: heroku_7wttfsz2
+
+prometheus:
+    port: 8787
+
+# datadog: # Enable datadog after opening up an account with them
+#    service_name: api server
+#    tags: ["mongo", "cluster-1"]
+#    stats_addr: localhost:8222
+#    namespace: mongostatusd
+# 
+# zipkin:
+#    local_endpoint: 192.168.1.5:5454
+#    reporter_uri: http://localhost:9411/api/v2/spans
+#    service_name: server
+# 
+# jaeger:
+#    service_name: my server
+#    local_endpoint: 192.168.1.5:5454
+#    reporter_uri: http://localhost:9411/api/v2/spans
+# 
+# aws-xray:
+#    version: latest
+
