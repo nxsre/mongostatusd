@@ -10,3 +10,9 @@
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+
+# Miscellaneous file
+data/
+*.sw[op]
+bin/
+*.DS_Store
