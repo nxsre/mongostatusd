@@ -53,10 +53,10 @@ func main() {
 		log.Fatalf("Failed to enable OpenCensus: %v", err)
 	}
 	defer func() {
-            log.Println("About to flush OpenCensus exporters")
-            flushFn()
-            log.Println("Flushed OpenCensus exporters")
-        }()
+		log.Println("About to flush OpenCensus exporters")
+		flushFn()
+		log.Println("Flushed OpenCensus exporters")
+	}()
 
 	mongoDBURI := config.MongoDBURI
 	if mongoDBURI == "" {
@@ -73,10 +73,10 @@ func main() {
 	}
 	defer func() {
 		log.Println("Disconnecting from Mongo...")
-                // As of `Mon  6 Aug 2018 16:07:50 PDT` and
-                // MongoDB Go driver commit: 44fa48dcf49c6ab707da1359c640383fc0c42e86
-                // (*Client).Disconnect takes an indefinite time to return
-                // so throw it in a goroutine
+		// As of `Mon  6 Aug 2018 16:07:50 PDT` and
+		// MongoDB Go driver commit: 44fa48dcf49c6ab707da1359c640383fc0c42e86
+		// (*Client).Disconnect takes an indefinite time to return
+		// so throw it in a goroutine
 		go mc.Disconnect(context.Background())
 		log.Println("Disconnected from Mongo!")
 	}()
