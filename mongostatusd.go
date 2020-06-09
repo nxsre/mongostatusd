@@ -18,8 +18,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/mongodb/mongo-go-driver/bson"
-	"github.com/mongodb/mongo-go-driver/mongo"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/x/bsonx"
 )
 
 type Config struct {
@@ -50,13 +51,14 @@ func (cfg *Config) Watch(mc *mongo.Client, stop <-chan bool) chan error {
 
 			case <-time.After(refreshPeriod):
 				ctx := context.Background()
-				blob, err := db.RunCommand(ctx, bson.NewDocument(bson.EC.Int32("serverStatus", 1)))
+				serverStatus, err := db.RunCommand(ctx, bsonx.Doc{{"serverStatus", bsonx.Int32(1)}}).DecodeBytes()
 				if err != nil {
 					errsChan <- err
 					continue
 				}
+
 				ss := new(ServerStatus)
-				if err := bson.Unmarshal(blob, ss); err != nil {
+				if err := bson.Unmarshal(serverStatus, ss); err != nil {
 					errsChan <- err
 					return
 				}
@@ -66,6 +68,12 @@ func (cfg *Config) Watch(mc *mongo.Client, stop <-chan bool) chan error {
 	}()
 
 	return errsChan
+}
+
+type StorageEngine struct {
+	Name                   string `bson:"name"`
+	SupportsCommittedReads bool   `bson:"supportsCommittedReads"`
+	Persistent             bool   `bson:"persistent"`
 }
 
 // The content from here on below is copied from https://github.com/mongodb/mongo/blob/30aded8889e2806aa22d0d4fcfb6314b07074771/src/mongo/gotools/mongostat/status/server_status.go
@@ -101,7 +109,7 @@ type ServerStatus struct {
 	Mem                *MemStats              `bson:"mem"`
 	Repl               *ReplStatus            `bson:"repl"`
 	ShardCursorType    map[string]interface{} `bson:"shardCursorType"`
-	StorageEngine      map[string]string      `bson:"storageEngine"`
+	StorageEngine      *StorageEngine         `bson:"storageEngine"`
 	WiredTiger         *WiredTiger            `bson:"wiredTiger"`
 }
 

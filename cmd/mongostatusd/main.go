@@ -16,11 +16,9 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"flag"
 	"io/ioutil"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -28,17 +26,19 @@ import (
 
 	"gopkg.in/yaml.v2"
 
-	"contrib.go.opencensus.io/exporter/stackdriver"
-	"github.com/DataDog/opencensus-go-exporter-datadog"
-	"go.opencensus.io/exporter/prometheus"
+	"contrib.go.opencensus.io/exporter/ocagent"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.opencensus.io/stats/view"
+	"go.opencensus.io/trace"
 
-	"github.com/mongodb/mongo-go-driver/mongo"
 	"github.com/opencensus-integrations/mongostatusd"
 )
 
 func main() {
-	yamlBlob, err := ioutil.ReadFile("./config.yaml")
+	configPath := flag.String("config", "", "the path to the YAML configuration file")
+	flag.Parse()
+	yamlBlob, err := ioutil.ReadFile(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to read the config.yaml file: %v", err)
 	}
@@ -48,15 +48,9 @@ func main() {
 		log.Fatalf("Failed to parse yaml file content: %v", err)
 	}
 
-	flushFn, err := enableOpenCensus(config)
-	if err != nil {
+	if err := enableOpenCensus(config); err != nil {
 		log.Fatalf("Failed to enable OpenCensus: %v", err)
 	}
-	defer func() {
-		log.Println("About to flush OpenCensus exporters")
-		flushFn()
-		log.Println("Flushed OpenCensus exporters")
-	}()
 
 	mongoDBURI := config.MongoDBURI
 	if mongoDBURI == "" {
@@ -64,7 +58,7 @@ func main() {
 	} else if !strings.HasPrefix(mongoDBURI, "mongodb://") {
 		mongoDBURI = "mongodb://" + mongoDBURI
 	}
-	mc, err := mongo.NewClient(mongoDBURI)
+	mc, err := mongo.NewClient(options.Client().ApplyURI(mongoDBURI))
 	if err != nil {
 		log.Fatalf("Failed to create MongoDB client: %v", err)
 	}
@@ -84,17 +78,19 @@ func main() {
 	cfg := &mongostatusd.Config{MongoDBName: config.MongoDBName}
 
 	stopChan := make(chan bool, 1)
-	go func() {
-		// Watch for any signal e.g. Ctrl-C, then stop the watcher
+	// Watch for any signal e.g. Ctrl-C, then stop the watcher
+	if false {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan)
-		notif := <-sigChan
-		log.Printf("Signal notified: %v", notif)
+		go func() {
+			notif := <-sigChan
+			log.Printf("Signal notified: %d, %v", notif, notif)
 
-		stopChan <- true
-		close(stopChan)
-		log.Printf("Successfully sent stop signal")
-	}()
+			stopChan <- true
+			close(stopChan)
+			log.Printf("Successfully sent stop signal")
+		}()
+	}
 
 	errsChan := cfg.Watch(mc, stopChan)
 	for err := range errsChan {
@@ -109,64 +105,19 @@ type Config struct {
 	MongoDBURI  string `yaml:"mongodb_uri"`
 
 	MetricsReportPeriod time.Duration `yaml:"metrics_report_period"`
-
-	DataDog     *DataDog     `yaml:"datadog"`
-	Prometheus  *Prometheus  `yaml:"prometheus"`
-	Stackdriver *Stackdriver `yaml:"stackdriver"`
-	Zipkin      *Zipkin      `yaml:"zipkin"`
 }
 
-type Prometheus struct {
-	Port      int    `yaml:"port"`
-	Namespace string `yaml:"namespace"`
-}
-
-type Stackdriver struct {
-	MetricPrefix string `yaml:"metric_prefix"`
-	ProjectID    string `yaml:"project_id"`
-}
-
-type Zipkin struct {
-	LocalEndpointURI string `yaml:"local_endpoint"`
-	ReporterURI      string `yaml:"reporter_uri"`
-	ServiceName      string `yaml:"service_name"`
-}
-
-type DataDog struct {
-	Namespace       string   `yaml:"namespace"`
-	Service         string   `yaml:"service_name"`
-	StatsAddressURI string   `yaml:"stats_addr"`
-	Tags            []string `yaml:"tags"`
-	TraceAddressURI string   `yaml:"trace_addr"`
-}
-
-func enableOpenCensus(cfg *Config) (flushFn func(), err error) {
+func enableOpenCensus(cfg *Config) error {
 	if err := view.Register(mongostatusd.AllViews...); err != nil {
-		return nil, err
+		return err
 	}
-
-	var flushFns []func()
-
-	defer func() {
-		if len(flushFns) > 0 {
-			flushFn = func() {
-				for _, fn := range flushFns {
-					fn()
-				}
-			}
-		}
-	}()
-
-	if scf := cfg.Stackdriver; scf != nil {
-		sd, err := stackdriver.NewExporter(stackdriver.Options{
-			MetricPrefix: scf.MetricPrefix,
-			ProjectID:    scf.ProjectID,
-		})
-		if err != nil {
-			return nil, err
-		}
-		view.RegisterExporter(sd)
-		flushFns = append(flushFns, sd.Flush)
+	oce, err := ocagent.NewExporter(
+		ocagent.WithInsecure(),
+		ocagent.WithAddress("localhost:55678"),
+		ocagent.WithServiceName("mongostatusd"),
+	)
+	if err != nil {
+		return err
 	}
 
 	metricsReportingPeriod := cfg.MetricsReportPeriod
@@ -174,46 +125,8 @@ func enableOpenCensus(cfg *Config) (flushFn func(), err error) {
 		metricsReportingPeriod = 5 * time.Second
 	}
 	view.SetReportingPeriod(metricsReportingPeriod)
+	view.RegisterExporter(oce)
+	trace.RegisterExporter(oce)
 
-	if pcf := cfg.Prometheus; pcf != nil {
-		var pe *prometheus.Exporter
-		pe, err = prometheus.NewExporter(prometheus.Options{
-			Namespace: pcf.Namespace,
-		})
-		if err != nil {
-			return
-		}
-		var ln net.Listener
-		ln, err = net.Listen("tcp", fmt.Sprintf("localhost:%d", pcf.Port))
-		if err != nil {
-			return
-		}
-
-		go func() {
-			defer ln.Close()
-
-			mux := http.NewServeMux()
-			mux.Handle("/metrics", pe)
-			if err := http.Serve(ln, mux); err != nil {
-				log.Fatalf("Prometheus exporter serve error: %v", err)
-			}
-		}()
-		// If flush is invoked, kill the Prometheus server/listener
-		flushFns = append(flushFns, func() { ln.Close() })
-		view.RegisterExporter(pe)
-	}
-
-	if dcf := cfg.DataDog; dcf != nil {
-		de := datadog.NewExporter(datadog.Options{
-			Namespace: dcf.Namespace,
-			Service:   dcf.Service,
-			TraceAddr: dcf.TraceAddressURI,
-			StatsAddr: dcf.StatsAddressURI,
-			Tags:      dcf.Tags,
-		})
-		view.RegisterExporter(de)
-		flushFns = append(flushFns, de.Stop)
-	}
-
-	return
+	return nil
 }
